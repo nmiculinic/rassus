@@ -1,11 +1,14 @@
 package main
 
 import (
+	"bufio"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
 	"net"
 	"os"
+	"sync"
 )
 
 const (
@@ -40,7 +43,7 @@ func (this *Vertex) dist(other *Vertex) float64 {
 		return math.Inf(+1)
 	}
 
-	R := 6371.0  // Earth diameter
+	R := 6371.0 // Earth diameter
 	dlon := other.lon - this.lon
 	dlat := other.lat - this.lat
 	a := square(math.Sin(dlat/2)) + math.Cos(this.lat)*math.Cos(other.lat)*square(math.Sin(dlon/2))
@@ -51,11 +54,14 @@ func (this *Vertex) dist(other *Vertex) float64 {
 
 type SensorState struct {
 	sensors map[string]*Vertex
+	mutex   sync.Mutex
 }
 
-func (state *SensorState) register(username string, lat, lon float64, ip string, port int) bool {
+func (state *SensorState) register(username string, lat, lon float64, ip string, port int) (bool, error) {
+	state.mutex.Lock()
+	defer state.mutex.Unlock()
 	if _, ok := state.sensors[username]; !ok {
-		return false
+		return false, errors.New("Sensor already exists")
 	}
 	state.sensors[username] = &Vertex{
 		lat:  lat,
@@ -63,10 +69,12 @@ func (state *SensorState) register(username string, lat, lon float64, ip string,
 		ip:   net.ParseIP(ip),
 		port: port,
 	}
-	return true
+	return true, nil
 }
 
 func (state *SensorState) search(username string) (*Vertex, error) {
+	state.mutex.Lock()
+	defer state.mutex.Unlock()
 	if _, ok := state.sensors[username]; !ok {
 		return nil, errors.New(fmt.Sprintf("Cannot found %s in sensors list", username))
 	}
@@ -83,11 +91,17 @@ func (state *SensorState) search(username string) (*Vertex, error) {
 	return sol, nil
 }
 
-func (state *SensorState) storeMeasurement(username string, parameter string, averageValue float64)  bool {
-	return false
+func (state *SensorState) storeMeasurement(username string, parameter string, averageValue float64) (bool, error) {
+	state.mutex.Lock()
+	defer state.mutex.Unlock()
+	return false, errors.New("Not yet implemented")
 }
 
 func main() {
+	state := &SensorState{
+		sensors: make(map[string]*Vertex),
+	}
+
 	// Listen for incoming connections.
 	l, err := net.Listen(CONN_TYPE, CONN_HOST+":"+CONN_PORT)
 	if err != nil {
@@ -105,21 +119,96 @@ func main() {
 			os.Exit(1)
 		}
 		// Handle connections in a new goroutine.
-		go handleRequest(conn)
+		go handleRequest(state, conn)
 	}
 }
 
-// Handles incoming requests.
-func handleRequest(conn net.Conn) {
-	// Make a buffer to hold incoming data.
-	buf := make([]byte, 1024)
-	// Read the incoming connection into the buffer.
-	_, err := conn.Read(buf)
+type request struct {
+	Jsonrpc string                 `json:"jsonrpc"`
+	Method  string                 `json:"method"`
+	Params  map[string]interface{} `json:"params"`
+	Id      int                    `json:"id"`
+}
+
+func (state *SensorState) test(username string) (string, error) {
+	state.mutex.Lock()
+	defer state.mutex.Unlock()
+	return fmt.Sprintf("Username is %s", username), nil
+}
+
+func (req *request) handleResponse(sol interface{}, err error, conn net.Conn){
+	if err != nil {
+		conn.Write([]byte(fmt.Sprintf(
+			`{"jsonrpc": "2.0", "error": {"code": -32000, "message": "Server error %s"}, "id": "%d"}`, err, req.Id)))
+	} else {
+		b, err := json.Marshal(sol)
+		if err != nil {
+			conn.Write([]byte(fmt.Sprintf(
+				`{"jsonrpc": "2.0", "error": {"code": -32001, "message": "Server error %s"}, "id": "%d"}`, err, req.Id)))
+		} else {
+			conn.Write([]byte(fmt.Sprintf(
+				`{"jsonrpc": "2.0", "result": %s, "id": "%d"}`, b, req.Id)))
+		}
+	}
+}
+
+func handleRequest(state *SensorState, conn net.Conn) {
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	var err error
+	recv, err := reader.ReadBytes('\n')
 	if err != nil {
 		fmt.Println("Error reading:", err.Error())
+		conn.Close()
 	}
-	// Send a response back to person contacting us.
-	conn.Write([]byte("Message received."))
-	// Close the connection when you're done with it.
-	conn.Close()
+
+	req := request{}
+	err = json.Unmarshal(recv, &req)
+	if err != nil {
+		conn.Write([]byte(fmt.Sprintf(
+			`{"jsonrpc": "2.0", "error": {"code": -32700, "message": "%s"}, "id": null}`,
+			err,
+		)))
+	}
+
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Errorf("Error happened %s", r)
+			conn.Write([]byte(fmt.Sprintf(
+				`{"jsonrpc": "2.0", "error": {"code": -32603, "message": "Internal error"}, "id": "%d"}`, req.Id)))
+		}
+	}()
+
+	switch req.Method {
+	case "test":
+		sol, err := state.test(req.Params["username"].(string))
+		req.handleResponse(sol, err, conn)
+	case "request":
+		sol, err := state.register(
+			req.Params["username"].(string),
+			req.Params["lat"].(float64),
+			req.Params["lon"].(float64),
+			req.Params["IP"].(string),
+			req.Params["port"].(int),
+		)
+		req.handleResponse(sol, err, conn)
+	case "search":
+		sol, err := state.search(
+			req.Params["username"].(string),
+		)
+		req.handleResponse(sol, err, conn)
+	case "storeMeasurement":
+		sol, err := state.storeMeasurement(
+			req.Params["username"].(string),
+			req.Params["param"].(string),
+			req.Params["averageValue"].(float64),
+		)
+		req.handleResponse(sol, err, conn)
+	default:
+		conn.Write([]byte(fmt.Sprintf(
+			`{"jsonrpc": "2.0", "error": {"code": -32601, "message": "Method not found"}, "id": "%d"}`, req.Id)))
+	}
+	fmt.Printf(`"%s" ID: %s`, req.Jsonrpc, req.Id)
+	fmt.Println()
+	fmt.Println(req)
 }
