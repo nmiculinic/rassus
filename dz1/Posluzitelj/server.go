@@ -5,10 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"math"
 	"net"
-	"os"
 	"sync"
+	"io"
 )
 
 const (
@@ -60,7 +61,10 @@ type SensorState struct {
 func (state *SensorState) register(username string, lat, lon float64, ip string, port int) (bool, error) {
 	state.mutex.Lock()
 	defer state.mutex.Unlock()
-	if _, ok := state.sensors[username]; !ok {
+	log.Println(state.sensors)
+	if _, fail := state.sensors[username]; fail {
+		log.Println(state.sensors)
+		log.Println(fail)
 		return false, errors.New("Sensor already exists")
 	}
 	state.sensors[username] = &Vertex{
@@ -98,6 +102,7 @@ func (state *SensorState) storeMeasurement(username string, parameter string, av
 }
 
 func main() {
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
 	state := &SensorState{
 		sensors: make(map[string]*Vertex),
 	}
@@ -105,21 +110,17 @@ func main() {
 	// Listen for incoming connections.
 	l, err := net.Listen(CONN_TYPE, CONN_HOST+":"+CONN_PORT)
 	if err != nil {
-		fmt.Println("Error listening:", err.Error())
-		os.Exit(1)
+		log.Fatal(err)
 	}
 	// Close the listener when the application closes.
 	defer l.Close()
 	fmt.Println("Listening on " + CONN_HOST + ":" + CONN_PORT)
 	for {
-		// Listen for an incoming connection.
-		conn, err := l.Accept()
-		if err != nil {
-			fmt.Println("Error accepting: ", err.Error())
-			os.Exit(1)
+		if conn, err := l.Accept(); err != nil {
+			log.Fatal(err)
+		} else {
+			go handleRequest(state, conn)
 		}
-		// Handle connections in a new goroutine.
-		go handleRequest(state, conn)
 	}
 }
 
@@ -136,18 +137,19 @@ func (state *SensorState) test(username string) (string, error) {
 	return fmt.Sprintf("Username is %s", username), nil
 }
 
-func (req *request) handleResponse(sol interface{}, err error, conn net.Conn){
+func (req *request) handleResponse(sol interface{}, err error, conn net.Conn) {
 	if err != nil {
 		conn.Write([]byte(fmt.Sprintf(
-			`{"jsonrpc": "2.0", "error": {"code": -32000, "message": "Server error %s"}, "id": "%d"}`, err, req.Id)))
+			`{"jsonrpc": "2.0", "error": {"code": -32000, "message": "Server error %s"}, "id": %d}`+"\n", err, req.Id)))
 	} else {
 		b, err := json.Marshal(sol)
 		if err != nil {
+			log.Println(err)
 			conn.Write([]byte(fmt.Sprintf(
-				`{"jsonrpc": "2.0", "error": {"code": -32001, "message": "Server error %s"}, "id": "%d"}`, err, req.Id)))
+				`{"jsonrpc": "2.0", "error": {"code": -32001, "message": "Server error %s"}, "id": %d}`+"\n", err, req.Id)))
 		} else {
 			conn.Write([]byte(fmt.Sprintf(
-				`{"jsonrpc": "2.0", "result": %s, "id": "%d"}`, b, req.Id)))
+				`{"jsonrpc": "2.0", "result": %s, "id": %d}`+"\n", b, req.Id)))
 		}
 	}
 }
@@ -155,41 +157,53 @@ func (req *request) handleResponse(sol interface{}, err error, conn net.Conn){
 func handleRequest(state *SensorState, conn net.Conn) {
 	defer conn.Close()
 	reader := bufio.NewReader(conn)
-	var err error
-	recv, err := reader.ReadBytes('\n')
-	if err != nil {
-		fmt.Println("Error reading:", err.Error())
-		conn.Close()
-	}
-
-	req := request{}
-	err = json.Unmarshal(recv, &req)
-	if err != nil {
-		conn.Write([]byte(fmt.Sprintf(
-			`{"jsonrpc": "2.0", "error": {"code": -32700, "message": "%s"}, "id": null}`,
-			err,
-		)))
-	}
 
 	defer func() {
 		if r := recover(); r != nil {
-			fmt.Errorf("Error happened %s", r)
-			conn.Write([]byte(fmt.Sprintf(
-				`{"jsonrpc": "2.0", "error": {"code": -32603, "message": "Internal error"}, "id": "%d"}`, req.Id)))
+			log.Print(r)
 		}
 	}()
+
+	for {
+		recv, err := reader.ReadBytes('\n')
+		if err != nil {
+			if err == io.EOF {
+				log.Println("Connection closed")
+			} else {
+				log.Println(err)
+			}
+			return
+		}
+		fmt.Println("got: ", string(recv))
+		if err := single_req(recv, conn, state); err != nil {
+			log.Println(err)
+			return
+		}
+	}
+}
+func single_req(recv []byte, conn net.Conn, state *SensorState) error {
+
+	req := request{}
+	if err := json.Unmarshal(recv, &req); err != nil {
+		conn.Write([]byte(fmt.Sprintf(
+			`{"jsonrpc": "2.0", "error": {"code": -32700, "message": "%s"}, "id": null}`+"\n",
+			err,
+		)))
+		log.Println(err)
+		return err
+	}
 
 	switch req.Method {
 	case "test":
 		sol, err := state.test(req.Params["username"].(string))
 		req.handleResponse(sol, err, conn)
-	case "request":
+	case "register":
 		sol, err := state.register(
 			req.Params["username"].(string),
 			req.Params["lat"].(float64),
 			req.Params["lon"].(float64),
-			req.Params["IP"].(string),
-			req.Params["port"].(int),
+			req.Params["ip"].(string),
+			int(req.Params["port"].(float64)),
 		)
 		req.handleResponse(sol, err, conn)
 	case "search":
@@ -206,9 +220,7 @@ func handleRequest(state *SensorState, conn net.Conn) {
 		req.handleResponse(sol, err, conn)
 	default:
 		conn.Write([]byte(fmt.Sprintf(
-			`{"jsonrpc": "2.0", "error": {"code": -32601, "message": "Method not found"}, "id": "%d"}`, req.Id)))
+			`{"jsonrpc": "2.0", "error": {"code": -32601, "message": "Method not found"}, "id": "%d"}`+"\n", req.Id)))
 	}
-	fmt.Printf(`"%s" ID: %s`, req.Jsonrpc, req.Id)
-	fmt.Println()
-	fmt.Println(req)
+	return nil
 }
