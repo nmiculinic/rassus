@@ -5,11 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"math"
 	"net"
+	"runtime/debug"
 	"sync"
-	"io"
 )
 
 const (
@@ -21,7 +22,7 @@ const (
 //oslužitelja koji komuniciraju koristeći web-usluge. Poslužitelj treba implementirati
 //3 metode. Jedna metoda će služiti za registraciju senzora kod poslužitelja ( boolean
 //register(String username, double latitude, double longitude,
-//String IPaddress, int port)), druga metoda vraća informacije o geografski
+//String IPaddress, int Port)), druga metoda vraća informacije o geografski
 //najbližem senzoru među senzorima koji su trenutno spojeni na poslužitelj (
 //UserAddress search Neighbour(String username)), a treća metoda služi
 //za prijavljivanje umjerenih podataka ( boolean storeMeasurement(String
@@ -29,10 +30,11 @@ const (
 //prijavljivanja umjerenih podataka ažurira i stanje blok-lanca. U
 
 type Vertex struct {
-	lat  float64
-	lon  float64
-	ip   net.IP
-	port int
+	Username string  `json:"username"`
+	Lat      float64 `json:"lat"`
+	Lon      float64 `json:"lon"`
+	Ip       net.IP  `json:"ip"`
+	Port     int     `json:"port"`
 }
 
 func square(x float64) float64 {
@@ -45,9 +47,9 @@ func (this *Vertex) dist(other *Vertex) float64 {
 	}
 
 	R := 6371.0 // Earth diameter
-	dlon := other.lon - this.lon
-	dlat := other.lat - this.lat
-	a := square(math.Sin(dlat/2)) + math.Cos(this.lat)*math.Cos(other.lat)*square(math.Sin(dlon/2))
+	dlon := other.Lon - this.Lon
+	dlat := other.Lat - this.Lat
+	a := square(math.Sin(dlat/2)) + math.Cos(this.Lat)*math.Cos(other.Lat)*square(math.Sin(dlon/2))
 	c := 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
 	d := R * c
 	return d
@@ -68,10 +70,11 @@ func (state *SensorState) register(username string, lat, lon float64, ip string,
 		return false, errors.New("Sensor already exists")
 	}
 	state.sensors[username] = &Vertex{
-		lat:  lat,
-		lon:  lon,
-		ip:   net.ParseIP(ip),
-		port: port,
+		Username: username,
+		Lat:      lat,
+		Lon:      lon,
+		Ip:       net.ParseIP(ip),
+		Port:     port,
 	}
 	return true, nil
 }
@@ -79,14 +82,16 @@ func (state *SensorState) register(username string, lat, lon float64, ip string,
 func (state *SensorState) search(username string) (*Vertex, error) {
 	state.mutex.Lock()
 	defer state.mutex.Unlock()
-	if _, ok := state.sensors[username]; !ok {
+	target, ok := state.sensors[username]
+	if !ok {
 		return nil, errors.New(fmt.Sprintf("Cannot found %s in sensors list", username))
 	}
 	var sol *Vertex = nil
 	var dist float64 = math.Inf(+1)
 	for k, v := range state.sensors {
+		log.Println(k, username, dist)
 		if k != username {
-			if sol.dist(v) < dist {
+			if sol == nil || target.dist(v) < dist {
 				sol = v
 				dist = sol.dist(v)
 			}
@@ -98,7 +103,9 @@ func (state *SensorState) search(username string) (*Vertex, error) {
 func (state *SensorState) storeMeasurement(username string, parameter string, averageValue float64) (bool, error) {
 	state.mutex.Lock()
 	defer state.mutex.Unlock()
-	return false, errors.New("Not yet implemented")
+	log.Println("To be implemented!!!")
+	return true, nil
+	//return false, errors.New("Not yet implemented")
 }
 
 func main() {
@@ -160,7 +167,7 @@ func handleRequest(state *SensorState, conn net.Conn) {
 
 	defer func() {
 		if r := recover(); r != nil {
-			log.Print(r)
+			log.Printf("%s: %s", r, debug.Stack()) // line 20
 		}
 	}()
 
@@ -168,21 +175,20 @@ func handleRequest(state *SensorState, conn net.Conn) {
 		recv, err := reader.ReadBytes('\n')
 		if err != nil {
 			if err == io.EOF {
-				log.Println("Connection closed")
+				log.Println(conn.RemoteAddr(), "Connection closed")
 			} else {
 				log.Println(err)
 			}
 			return
 		}
 		fmt.Println("got: ", string(recv))
-		if err := single_req(recv, conn, state); err != nil {
+		if err := singleRequest(recv, conn, state); err != nil {
 			log.Println(err)
 			return
 		}
 	}
 }
-func single_req(recv []byte, conn net.Conn, state *SensorState) error {
-
+func singleRequest(recv []byte, conn net.Conn, state *SensorState) error {
 	req := request{}
 	if err := json.Unmarshal(recv, &req); err != nil {
 		conn.Write([]byte(fmt.Sprintf(
@@ -210,7 +216,12 @@ func single_req(recv []byte, conn net.Conn, state *SensorState) error {
 		sol, err := state.search(
 			req.Params["username"].(string),
 		)
-		req.handleResponse(sol, err, conn)
+		if sol == nil {
+			req.handleResponse(sol, err, conn)
+		} else {
+			log.Println(*sol)
+			req.handleResponse(*sol, err, conn)
+		}
 	case "storeMeasurement":
 		sol, err := state.storeMeasurement(
 			req.Params["username"].(string),
