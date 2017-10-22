@@ -3,29 +3,29 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/binary"
-	"math"
 	"errors"
 	"fmt"
-	"sync"
 	"log"
+	"math"
+	"sync"
 )
 
 type Block struct {
-	last *Block
+	last     *Block
 	username string
-	param string
-	value float64
-	id int
-	hash []byte
+	param    string
+	value    float64
+	id       int
+	hash     []byte
 }
 
-func (blk *Block) Append(username string, parameter string, value float64) (*Block, error){
+func (blk *Block) Append(username string, parameter string, value float64) (*Block, error) {
 	sol := &Block{
-		last: blk,
+		last:     blk,
 		username: username,
-		param: parameter,
-		value: value,
-		id: blk.id + 1,
+		param:    parameter,
+		value:    value,
+		id:       blk.id + 1,
 	}
 	h := sha256.New()
 	h.Write([]byte(sol.username))
@@ -39,7 +39,6 @@ func (blk *Block) Append(username string, parameter string, value float64) (*Blo
 	sol.hash = h.Sum(nil)
 	return sol, nil
 }
-
 
 func (blk *Block) getBlock(i int) (*Block, error) {
 	if blk.id < i || i < 0 {
@@ -69,7 +68,7 @@ func (blk *Block) getState() (map[string]map[string]float64, error) {
 	return sol, nil
 }
 
-var LastBlock *Block = &Block{id:0}
+var LastBlock *Block = &Block{id: 0}
 var blockMuter sync.Mutex
 
 func PeekLast() *Block {
@@ -86,4 +85,3 @@ func Append(username string, parameter string, value float64) (*Block, error) {
 	LastBlock = sol
 	return sol, nil
 }
-

@@ -92,7 +92,7 @@ func (state *SensorState) storeMeasurement(username string, parameter string, av
 	if blk, err := Append(username, parameter, averageValue); err != nil {
 		return false, err
 	} else {
-		if blk.id % 100 == 0 {
+		if blk.id%100 == 0 {
 			state, _ := blk.getState()
 			log.Println("Blockchain current state:\n", state)
 		}
