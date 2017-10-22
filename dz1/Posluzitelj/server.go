@@ -19,16 +19,6 @@ const (
 	CONN_TYPE = "tcp"
 )
 
-//oslužitelja koji komuniciraju koristeći web-usluge. Poslužitelj treba implementirati
-//3 metode. Jedna metoda će služiti za registraciju senzora kod poslužitelja ( boolean
-//register(String username, double latitude, double longitude,
-//String IPaddress, int Port)), druga metoda vraća informacije o geografski
-//najbližem senzoru među senzorima koji su trenutno spojeni na poslužitelj (
-//UserAddress search Neighbour(String username)), a treća metoda služi
-//za prijavljivanje umjerenih podataka ( boolean storeMeasurement(String
-//username, String parameter, float averageValue) ). Neka se prilikom
-//prijavljivanja umjerenih podataka ažurira i stanje blok-lanca. U
-
 type Vertex struct {
 	Username string  `json:"username"`
 	Lat      float64 `json:"lat"`
@@ -45,7 +35,6 @@ func (this *Vertex) dist(other *Vertex) float64 {
 	if this == nil {
 		return math.Inf(+1)
 	}
-
 	R := 6371.0 // Earth diameter
 	dlon := other.Lon - this.Lon
 	dlat := other.Lat - this.Lat
@@ -89,7 +78,6 @@ func (state *SensorState) search(username string) (*Vertex, error) {
 	var sol *Vertex = nil
 	var dist float64 = math.Inf(+1)
 	for k, v := range state.sensors {
-		log.Println(k, username, dist)
 		if k != username {
 			if sol == nil || target.dist(v) < dist {
 				sol = v
@@ -101,11 +89,15 @@ func (state *SensorState) search(username string) (*Vertex, error) {
 }
 
 func (state *SensorState) storeMeasurement(username string, parameter string, averageValue float64) (bool, error) {
-	state.mutex.Lock()
-	defer state.mutex.Unlock()
-	log.Println("To be implemented!!!")
-	return true, nil
-	//return false, errors.New("Not yet implemented")
+	if blk, err := Append(username, parameter, averageValue); err != nil {
+		return false, err
+	} else {
+		if blk.id % 100 == 0 {
+			state, _ := blk.getState()
+			log.Println("Blockchain current state:\n", state)
+		}
+		return true, nil
+	}
 }
 
 func main() {
@@ -175,13 +167,13 @@ func handleRequest(state *SensorState, conn net.Conn) {
 		recv, err := reader.ReadBytes('\n')
 		if err != nil {
 			if err == io.EOF {
-				log.Println(conn.RemoteAddr(), "Connection closed")
+				//log.Println(conn.RemoteAddr(), "Connection closed")
 			} else {
 				log.Println(err)
 			}
 			return
 		}
-		fmt.Println("got: ", string(recv))
+		log.Print("got: ", string(recv))
 		if err := singleRequest(recv, conn, state); err != nil {
 			log.Println(err)
 			return
