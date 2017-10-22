@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"log"
 	"math"
 	"sync"
 )
@@ -54,7 +53,6 @@ func (blk *Block) getState() (map[string]map[string]float64, error) {
 	sol := make(map[string]map[string]float64)
 	curr := blk
 	for curr != nil && curr.last != nil {
-		log.Println(*curr)
 		val, ok := sol[curr.username]
 		if !ok {
 			sol[curr.username] = make(map[string]float64)
