@@ -104,6 +104,7 @@ func (server *ServerConn) jsonrpc(method string, params interface{}) (interface{
 
 func gen_csv(csvFile string) (records [][]string, err error) {
 	f, err := os.Open(csvFile)
+	defer f.Close()
 	if err != nil {
 		log.Panic(err)
 		return
