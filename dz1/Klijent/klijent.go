@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"github.com/google/uuid"
+	"gopkg.in/resty.v1"
 	"io"
 	"log"
 	"math/rand"
@@ -15,20 +16,18 @@ import (
 	"os"
 	"strconv"
 	"sync"
-	"sync/atomic"
 	"time"
+	"github.com/nmiculinic/rassus/dz1/interfaces"
+	"net/http"
 )
 
 type Context struct {
-	Username    string  `json:"username"`
-	Lat         float64 `json:"lat"`
-	Lon         float64 `json:"lon"`
-	IP          string  `json:"ip"`
-	Port        int     `json:"port"`
+	desc        interfaces.Vertex
 	data        map[string]float64
 	neighbour   *net.Conn
 	neighReader *bufio.Reader
 	lock        sync.Mutex
+	connStr     string
 }
 
 func genDesc() (*Context, error) {
@@ -38,68 +37,33 @@ func genDesc() (*Context, error) {
 	}
 	defer conn.Close()
 	return &Context{
-		Username: uuid.New().String(),
-		Lon:      rand.Float64()*0.1 + 45.75,
-		Lat:      rand.Float64()*0.13 + 15.87,
-		IP:       conn.LocalAddr().(*net.UDPAddr).IP.String(),
+		desc: interfaces.Vertex{
+			Username: uuid.New().String(),
+			Lon:      rand.Float64()*0.1 + 45.75,
+			Lat:      rand.Float64()*0.13 + 15.87,
+			Ip:       conn.LocalAddr().(*net.UDPAddr).IP,
+		},
 		data:     make(map[string]float64),
 	}, nil
 }
 
-type resp struct {
-	Jsonrpc string      `json:"jsonrpc"`
-	Error   interface{} `json:"error"`
-	Result  interface{} `json:"result"`
-	Id      int         `json:"id"`
-}
-
-type ServerConn struct {
-	conn_str *net.TCPAddr
-	id       int32
-}
-
-func (server *ServerConn) jsonrpc(method string, params interface{}) (interface{}, error) {
-	connRaw, err := net.Dial("tcp", server.conn_str.String())
-	if err != nil {
-		log.Panic(err)
-	}
-	defer connRaw.Close()
-	conn := bufio.NewReadWriter(bufio.NewReader(connRaw), bufio.NewWriter(connRaw))
-
-	id := atomic.LoadInt32(&server.id)
-	atomic.AddInt32(&server.id, 1)
-	req, err := json.Marshal(map[string]interface{}{
-		"jsonrpc": "2.0",
-		"method":  method,
-		"params":  params,
-		"id":      id,
-	})
-	if err != nil {
-		log.Panic(err)
-	}
-	log.Println("sending", string(req))
-	if _, err := conn.Write(append(req, []byte("\n")...)); err != nil {
-		log.Panic(err)
-	}
-	if err = conn.Flush(); err != nil {
-		log.Panic(err)
+func (ctx *Context) register() error {
+	if ctx.connStr == "" {
+		return errors.New("No connection string for server")
 	}
 
-	response, err := conn.ReadBytes('\n')
-	if err != nil {
-		log.Panic(err)
+	if resp, err := resty.R().
+		SetBody(ctx.desc).
+		Post(fmt.Sprintf("http://%s/register", ctx.connStr)); err != nil {
+		log.Println(resp, resp.StatusCode())
+		if resp.StatusCode() != http.StatusOK {
+			return errors.New(fmt.Sprint(resp, resp.StatusCode()))
+		} else {
+			return nil
+		}
+	} else {
+		return err
 	}
-
-	log.Print("getting", string(response))
-	r := resp{}
-	err = json.Unmarshal(response, &r)
-	if err != nil {
-		log.Panic("json decoding response", err)
-	}
-	if r.Error != nil {
-		return nil, errors.New(fmt.Sprint(r.Error))
-	}
-	return r.Result, nil
 }
 
 func gen_csv(csvFile string) (records [][]string, err error) {
@@ -120,18 +84,15 @@ func main() {
 	csvFile := flag.String("csv", "mjerenja.csv", "Location of csv file")
 	flag.Parse()
 
-	rec, err := gen_csv(*csvFile)
-	server, err := net.ResolveTCPAddr("tcp", *ServerStr)
+	ctx, err := genDesc()
 	if err != nil {
 		log.Panic(err)
 	}
-	srv := &ServerConn{
-		conn_str: server,
-		id:       1,
-	}
+	ctx.connStr = *ServerStr
 
-	ctx, err := genDesc()
-	if err != nil {
+	rec, err := gen_csv(*csvFile)
+
+	if err := ctx.register(); err != nil {
 		log.Panic(err)
 	}
 
@@ -139,29 +100,32 @@ func main() {
 		log.Panic(err)
 	} else {
 		go handleSrv(ln, ctx)
-		ctx.Port = ln.Addr().(*net.TCPAddr).Port
-		log.Printf("Server at [%s]; Me:%s\n", server, ctx)
+		ctx.desc.Port = ln.Addr().(*net.TCPAddr).Port
+		log.Printf("Server at [%s]; Me:%s\n", ctx.connStr, ctx)
 	}
 
-	if resp, err := srv.jsonrpc("register", ctx); err != nil {
-		log.Panic(err)
-	} else {
-		log.Println(resp)
-	}
-	testRPC(srv, ctx)
 
-	getNeighbour(srv, ctx)
+	ctx.getNeighbour()
 
 	startTime := time.Now()
 	for {
-		readMeasurement(startTime, rec, ctx, srv)
-		time.Sleep(2500 * time.Millisecond)
+		if data, err := ctx.readMeasurement(startTime, rec); err != nil {
+			log.Println(err)
+		} else {
+			log.Println(data)
+			for param, val := range data {
+				if err := ctx.storeMeasurement(param, val); err != nil {
+					log.Panic("Cannot store measurement!", err)
+				}
+			}
+		}
+		time.Sleep(500 * time.Millisecond)
 	}
 }
 
-func fetchNeighbourMeasurement(ctx *Context, srv *ServerConn) (map[string]float64, error) {
+func (ctx *Context) fetchNeighbourMeasurement() (map[string]float64, error) {
 	if ctx.neighbour == nil {
-		addr, err := getNeighbour(srv, ctx)
+		addr, err := ctx.getNeighbour()
 		if err != nil {
 			log.Println(err)
 			return nil, err
@@ -195,7 +159,7 @@ func fetchNeighbourMeasurement(ctx *Context, srv *ServerConn) (map[string]float6
 	}
 }
 
-func readMeasurement(startTime time.Time, rec [][]string, ctx *Context, srv *ServerConn) {
+func (ctx *Context) readMeasurement(startTime time.Time, rec [][]string) (map[string]float64, error) {
 	elapsedSeconds := time.Now().Sub(startTime).Seconds()
 	no := (int(elapsedSeconds) % 100) + 2
 	log.Printf("Elapsed seconds %f, field %d, data %s\n", elapsedSeconds, no, rec[no])
@@ -223,7 +187,7 @@ func readMeasurement(startTime time.Time, rec [][]string, ctx *Context, srv *Ser
 		return data
 	}()
 
-	if neighbour, err := fetchNeighbourMeasurement(ctx, srv); err != nil {
+	if neighbour, err := ctx.fetchNeighbourMeasurement(); err != nil {
 		log.Println(err)
 	} else {
 		log.Println("Neighbour data: 	", neighbour)
@@ -234,92 +198,97 @@ func readMeasurement(startTime time.Time, rec [][]string, ctx *Context, srv *Ser
 			}
 		}
 	}
+	return data, nil
 
-	for param, val := range data {
-		if resp, err := srv.jsonrpc("storeMeasurement", map[string]interface{}{
-			"username":     ctx.Username,
-			"param":        param,
-			"averageValue": val,
-		}); err != nil {
-			log.Panic(err)
-		} else {
-			log.Println("Got", resp)
-		}
-	}
 }
-func getNeighbour(srv *ServerConn, desc *Context) (*net.TCPAddr, error) {
-	if resp, err := srv.jsonrpc("search", map[string]string{"username": desc.Username}); err != nil {
-		log.Panic(err)
+func (ctx *Context) getNeighbour() (*net.TCPAddr, error) {
+	if resp, err := resty.R().
+		SetHeader("Accept", "application/json").
+		Get(fmt.Sprintf("http://%s/search/%s", ctx.connStr, ctx.desc.Username)); err != nil {
+		log.Println(err)
 		return nil, err
 	} else {
-		log.Println("Nearest server: ", resp)
-		if resp != nil {
-			rr := resp.(map[string]interface{})
-			if addr, err := net.ResolveTCPAddr("tcp", rr["ip"].(string)+":"+fmt.Sprint(rr["port"])); err != nil {
-				log.Panic(err)
-				return nil, err
-			} else {
-				log.Println("Found a mate :)!", rr["username"], addr)
-				return addr, nil
-			}
+		log.Println("Nearest server: ", resp, resp.StatusCode())
+		if resp.StatusCode() != http.StatusOK {
+			return nil, errors.New(fmt.Sprint(resp))
+		}
+		var rr interfaces.Vertex
+		json.Unmarshal(resp.Body(), &rr)
+		if addr, err := net.ResolveTCPAddr("tcp", fmt.Sprintf("%s:%d", rr.Ip, rr.Port)); err != nil {
+			log.Panic(err)
+			return nil, err
 		} else {
-			log.Println("I'm the lonely client...")
-			return nil, nil
+			log.Println("Found a mate :)!", rr.Username, addr)
+			return addr, nil
 		}
 	}
 }
 
-func testRPC(srv *ServerConn, desc *Context) {
-	if resp, err := srv.jsonrpc("test", map[string]string{"username": desc.Username}); err != nil {
-		log.Panic(err)
-	} else {
+func (ctx *Context) storeMeasurement(param string, value float64) error {
+	m := interfaces.Measurement{
+		Username:ctx.desc.Username,
+		Param:param,
+		Value:value,
+	}
+	if resp, err := resty.R().
+		SetBody(m).
+		Post(fmt.Sprintf("http://%s/storeMeasurement", ctx.connStr)); err != nil {
 		log.Println(resp)
+		if resp.StatusCode() != http.StatusOK {
+			return errors.New(fmt.Sprint(resp))
+		}
+		return nil
+	} else {
+		return err
 	}
 }
 
 func handleSrv(ln net.Listener, ctx *Context) {
 	defer ln.Close()
+
+	handleConn := func(conn net.Conn) {
+		defer conn.Close()
+		reader := bufio.NewReader(conn)
+
+		singleRequest := func(req string) error {
+			data, err := func() ([]byte, error) {
+				ctx.lock.Lock()
+				defer ctx.lock.Unlock()
+				return json.Marshal(ctx.data)
+			}()
+
+			if err != nil {
+				log.Println(err)
+				return err
+			}
+			_, err = conn.Write(append(data, []byte("\n")...))
+			return err
+		}
+
+		for {
+			recv, err := reader.ReadBytes('\n')
+			if err != nil {
+				if err == io.EOF {
+					log.Println(conn.RemoteAddr(), "Connection closed")
+				} else {
+					log.Println(err)
+				}
+				return
+			}
+			fmt.Println("got: ", string(recv))
+			if err := singleRequest(string(recv)); err != nil {
+				log.Println(err)
+				return
+			}
+		}
+
+	}
+
 	for {
 		if conn, err := ln.Accept(); err != nil {
 			log.Println(err)
 		} else {
-			go handleConn(conn, ctx)
-		}
-	}
-}
-func handleConn(conn net.Conn, ctx *Context) {
-	defer conn.Close()
-	reader := bufio.NewReader(conn)
-
-	singleRequest := func(req string) error {
-		data, err := func() ([]byte, error) {
-			ctx.lock.Lock()
-			defer ctx.lock.Unlock()
-			return json.Marshal(ctx.data)
-		}()
-
-		if err != nil {
-			log.Println(err)
-			return err
-		}
-		_, err = conn.Write(append(data, []byte("\n")...))
-		return err
-	}
-
-	for {
-		recv, err := reader.ReadBytes('\n')
-		if err != nil {
-			if err == io.EOF {
-				log.Println(conn.RemoteAddr(), "Connection closed")
-			} else {
-				log.Println(err)
-			}
-			return
-		}
-		fmt.Println("got: ", string(recv))
-		if err := singleRequest(string(recv)); err != nil {
-			log.Println(err)
-			return
+			go handleConn(conn)
 		}
 	}
 }
