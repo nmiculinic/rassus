@@ -23,7 +23,7 @@ func square(x float64) float64 {
 	return x * x
 }
 
-func (this *Vertex) dist(other *Vertex) float64 {
+func (this *Vertex) Dist(other *Vertex) float64 {
 	if this == nil {
 		return math.Inf(+1)
 	}

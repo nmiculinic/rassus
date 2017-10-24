@@ -6,6 +6,7 @@ import (
 	"github.com/nmiculinic/rassus/dz1/Posluzitelj/blockchain"
 	"github.com/nmiculinic/rassus/dz1/interfaces"
 	"log"
+	"math"
 	"net/http"
 	"sync"
 )
@@ -22,13 +23,13 @@ func New() *restful.WebService {
 		Produces(restful.MIME_JSON)
 
 	sensors := make(map[string]*interfaces.Vertex)
-	mutex := new(sync.Mutex)
+	sensorMutex := new(sync.Mutex)
 	block := blockchain.New()
 	blockMutex := sync.Mutex{}
 
 	service.Route(service.POST("/register").To(func(request *restful.Request, response *restful.Response) {
-		mutex.Lock()
-		defer mutex.Unlock()
+		sensorMutex.Lock()
+		defer sensorMutex.Unlock()
 		log.Println(sensors)
 		args := &interfaces.Vertex{}
 		if err := request.ReadEntity(args); err != nil {
@@ -40,11 +41,11 @@ func New() *restful.WebService {
 			log.Println(sensors)
 			log.Println(fail)
 			response.WriteError(http.StatusUnprocessableEntity, errors.New("Sensor already exists"))
-		}
-
-		sensors[args.Username] = args
-		if err := response.WriteEntity(map[string]bool{"result": true}); err != nil {
-			log.Println(err)
+		} else {
+			sensors[args.Username] = args
+			if err := response.WriteEntity(map[string]bool{"result": true}); err != nil {
+				log.Println(err)
+			}
 		}
 	}))
 	service.Route(service.POST("/storeMeasurement").To(func(request *restful.Request, response *restful.Response) {
@@ -67,6 +68,31 @@ func New() *restful.WebService {
 			block = blk
 			if err := response.WriteEntity(map[string]bool{"result": true}); err != nil {
 				log.Println(err)
+			}
+		}
+	}))
+	service.Route(service.GET("/search/{username}").To(func(request *restful.Request, response *restful.Response) {
+		sensorMutex.Lock()
+		sensorMutex.Unlock()
+
+		username := request.PathParameter("username")
+		if target, ok := sensors[username]; !ok {
+			response.WriteError(http.StatusPreconditionFailed, errors.New("No such username "+username))
+		} else {
+			var sol *interfaces.Vertex = nil
+			var dist float64 = math.Inf(+1)
+			for k, v := range sensors {
+				if k != username {
+					if sol == nil || target.Dist(v) < dist {
+						sol = v
+						dist = sol.Dist(v)
+					}
+				}
+			}
+			if sol != nil {
+				response.WriteEntity(*sol)
+			} else {
+				response.WriteError(http.StatusNotFound, errors.New("No neighbours to return"))
 			}
 		}
 	}))

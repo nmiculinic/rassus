@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 )
+
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 	restful.Add(service.New())
