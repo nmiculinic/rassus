@@ -8,17 +8,17 @@ import (
 	"flag"
 	"fmt"
 	"github.com/google/uuid"
+	"github.com/nmiculinic/rassus/dz1/interfaces"
 	"gopkg.in/resty.v1"
 	"io"
 	"log"
 	"math/rand"
 	"net"
+	"net/http"
 	"os"
 	"strconv"
 	"sync"
 	"time"
-	"github.com/nmiculinic/rassus/dz1/interfaces"
-	"net/http"
 )
 
 type Context struct {
@@ -43,7 +43,7 @@ func genDesc() (*Context, error) {
 			Lat:      rand.Float64()*0.13 + 15.87,
 			Ip:       conn.LocalAddr().(*net.UDPAddr).IP,
 		},
-		data:     make(map[string]float64),
+		data: make(map[string]float64),
 	}, nil
 }
 
@@ -92,19 +92,18 @@ func main() {
 
 	rec, err := gen_csv(*csvFile)
 
-	if err := ctx.register(); err != nil {
-		log.Panic(err)
-	}
-
 	if ln, err := net.Listen("tcp", ":0"); err != nil {
 		log.Panic(err)
 	} else {
 		go handleSrv(ln, ctx)
 		ctx.desc.Port = ln.Addr().(*net.TCPAddr).Port
-		log.Printf("Server at [%s]; Me:%s\n", ctx.connStr, ctx)
+		r, _ := json.Marshal(ctx.desc)
+		log.Printf("Server at [%s]; Me:%s\n", ctx.connStr, r)
 	}
 
-
+	if err := ctx.register(); err != nil {
+		log.Panic(err)
+	}
 	ctx.getNeighbour()
 
 	startTime := time.Now()
@@ -130,8 +129,8 @@ func (ctx *Context) fetchNeighbourMeasurement() (map[string]float64, error) {
 			log.Println(err)
 			return nil, err
 		}
-		if conn, err := net.Dial("tcp", addr.String()); err != nil {
-			log.Println(err)
+		if conn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", addr.IP, addr.Port)); err != nil {
+			log.Println("Error connecting to ", fmt.Sprintf("%s:%d", addr.IP, addr.Port), addr.String(), err)
 			return nil, err
 		} else {
 			log.Println("Connected to client ", conn.RemoteAddr())
@@ -150,6 +149,9 @@ func (ctx *Context) fetchNeighbourMeasurement() (map[string]float64, error) {
 	}
 
 	if data, err := ctx.neighReader.ReadBytes('\n'); err != nil {
+		if err == io.EOF {
+			return nil, errors.New("sensor disconnected")
+		}
 		log.Println(err)
 		return nil, err
 	} else {
@@ -169,7 +171,7 @@ func (ctx *Context) readMeasurement(startTime time.Time, rec [][]string) (map[st
 		for i := 0; i < len(rec[0]); i++ {
 			param := rec[0][i]
 			val, err := strconv.ParseFloat(rec[no][i], 64)
-			if err != nil {
+			if err != nil || val == 0 {
 				log.Println(
 					fmt.Sprintf(
 						"Missing value for Row %d, param %s ",
@@ -226,9 +228,9 @@ func (ctx *Context) getNeighbour() (*net.TCPAddr, error) {
 
 func (ctx *Context) storeMeasurement(param string, value float64) error {
 	m := interfaces.Measurement{
-		Username:ctx.desc.Username,
-		Param:param,
-		Value:value,
+		Username: ctx.desc.Username,
+		Param:    param,
+		Value:    value,
 	}
 	if resp, err := resty.R().
 		SetBody(m).

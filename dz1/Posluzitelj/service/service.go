@@ -47,6 +47,7 @@ func New() *restful.WebService {
 				log.Println(err)
 			}
 		}
+		log.Println("Known sensors:", sensors)
 	}))
 	service.Route(service.POST("/storeMeasurement").To(func(request *restful.Request, response *restful.Response) {
 		blockMutex.Lock()
