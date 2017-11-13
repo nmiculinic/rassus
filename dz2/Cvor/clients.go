@@ -122,7 +122,8 @@ func handleConn(in, out, inUDPPackages chan []byte, conn *ShittyConn, addr *net.
 			for k := range toAck {
 				keys = append(keys, k)
 			}
-			log.Println("Missing acks for packages", addr, keys)
+			log.Println("Missing acks for packages", addr, keys, len(toAck))
+
 			for pid, out := range toAck {
 				go func() {
 					if _, err := conn.WriteToUDP(out, addr); err != nil {
