@@ -8,7 +8,13 @@ import (
 	"math/rand"
 	"net"
 	"time"
+	"encoding/json"
 )
+
+type Message struct {
+	ScalarTimestamp ScalarTimestamp `json:"scalar_timestamp"`
+}
+
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
@@ -84,13 +90,23 @@ func main() {
 		case <-sending:
 			log.Println("ovdje sam ")
 			target := clients[rand.Int31n(int32(len(clients)))]
-			log.Println("Sending to ", target)
-			outward[fmt.Sprint(target)] <- []byte("Ok sam")
+			log.Println("Sending to ", target, "at ", NowScalar())
+			if b, err := json.Marshal(Message{NowScalar()}); err != nil {
+				log.Println(err)
+			} else {
+				outward[fmt.Sprint(target)] <- b
+			}
 		default:
 			target := clients[rand.Int31n(int32(len(clients)))]
 			select {
 			case recv := <-inward[fmt.Sprint(target)]:
 				log.Println("Got from inward", string(recv))
+				var m Message
+				if err := json.Unmarshal(recv, &m); err != nil {
+					log.Println(err)
+				} else {
+					UpdateScalar(&m.ScalarTimestamp)
+				}
 			default:
 			}
 		}
