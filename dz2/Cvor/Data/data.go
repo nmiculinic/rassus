@@ -1,13 +1,13 @@
 package Data
 
 import (
-	"time"
-	"strconv"
-	"fmt"
-	"os"
 	"encoding/csv"
-	"log"
 	"errors"
+	"fmt"
+	"log"
+	"os"
+	"strconv"
+	"time"
 )
 
 func ReadCSV(csvFile string) (records [][]string, err error) {
@@ -20,7 +20,7 @@ func ReadCSV(csvFile string) (records [][]string, err error) {
 	records, err = r.ReadAll()
 	return
 }
-func ReadMeasurement(startTime time.Time, rec [][]string) (float64, error){
+func ReadMeasurement(startTime time.Time, rec [][]string) (float64, error) {
 	elapsedSeconds := time.Now().Sub(startTime).Seconds()
 	no := (int(elapsedSeconds) % 100) + 2
 	log.Printf("Elapsed seconds %f, field %d, data %s\n", elapsedSeconds, no, rec[no])

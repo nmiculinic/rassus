@@ -1,13 +1,13 @@
 package main
 
 import (
-	"log"
 	"flag"
-	"github.com/nmiculinic/rassus/dz2/Cvor/Data"
-	"time"
 	"fmt"
-	"net"
+	"github.com/nmiculinic/rassus/dz2/Cvor/Data"
+	"log"
 	"math/rand"
+	"net"
+	"time"
 )
 
 func main() {
@@ -15,6 +15,8 @@ func main() {
 	csvFile := flag.String("csv", "mjerenja.csv", "Location of csv file")
 	clientsFile := flag.String("clients", "clients.csv", "Location of clients file")
 	id := flag.Int("id", -1, "Client id in clients file")
+	lossRate := flag.Float64("avgLoss", 0.1, "Average loss rate")
+	avgDelay := flag.Float64("avgDelay", 1.0, "Average delay rate in seconds")
 	flag.Parse()
 
 	rec, err := Data.ReadCSV(*csvFile)
@@ -33,7 +35,9 @@ func main() {
 	}
 
 	me := clients[*id]
-	log.Println(me)
+	clients = append(clients[:*id], clients[*id+1:]...)
+	log.Println("me", me)
+	log.Println("Clients", clients)
 
 	conn, err := net.ListenUDP("udp", me)
 	if err != nil {
@@ -41,40 +45,53 @@ func main() {
 		return
 	}
 	defer conn.Close()
-	go udpListener(conn)
+
+	inward := make(map[string]chan []byte)
+	outward := make(map[string]chan []byte)
+	router_inward := make(map[string]chan []byte)
+
+	for _, client := range clients {
+		router_inward[fmt.Sprint(client)] = make(chan []byte)
+		inward[fmt.Sprint(client)] = make(chan []byte)
+		outward[fmt.Sprint(client)] = make(chan []byte)
+	}
+
+	go UDProuter(conn, router_inward)
+	for k := range inward {
+		addr, err :=
+			net.ResolveUDPAddr("udp", k)
+		if err != nil {
+			log.Panic(err)
+		}
+
+		go handleConn(
+			inward[k],
+			outward[k],
+			router_inward[k],
+			&ShittyConn{
+				UDPConn: *conn,
+				avgDelay: *avgDelay,
+				lossRate: *lossRate,
+				},
+			addr,
+		)
+	}
+
+	sending := time.Tick(2000 * time.Millisecond)
 
 	for {
 		select {
-			case <- time.Tick(1 * time.Second):
-				fmt.Println("Ticked!")
-			case <- time.Tick(500 * time.Millisecond):
-				target := me
-				for ;target == me;{
-					target = clients[rand.Int31n(int32(len(clients)))]
-				}
-				if _, err := conn.WriteToUDP([]byte("ok sam"), target); err != nil {
-					log.Println(err)
-				} else {
-					log.Println("Sent package to ", target)
-				}
-		}
-	}
-}
-
-func udpListener(conn *net.UDPConn) {
-	buf := make([]byte, 1024)
-	for {
-		n,addr,err := conn.ReadFromUDP(buf)
-		if err != nil {
-			log.Println("Error: ",err)
-		} else {
-			log.Println("Received ",string(buf[0:n]), " from ",addr)
-			if string(buf[0:n]) != "Ack!" {
-				respFn:= func() {
-					//time.Sleep(1 * time.Second)
-					conn.WriteToUDP([]byte("Ack!"), addr)
-				}
-				go respFn()
+		case <-sending:
+			log.Println("ovdje sam ")
+			target := clients[rand.Int31n(int32(len(clients)))]
+			log.Println("Sending to ", target)
+			outward[fmt.Sprint(target)] <- []byte("Ok sam")
+		default:
+			target := clients[rand.Int31n(int32(len(clients)))]
+			select {
+			case recv := <-inward[fmt.Sprint(target)]:
+				log.Println("Got from inward", string(recv))
+			default:
 			}
 		}
 	}
