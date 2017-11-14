@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"github.com/nmiculinic/rassus/dz2/Cvor/Data"
 	"log"
-	"math/rand"
 	"net"
 	"sort"
 	"time"
@@ -119,28 +118,32 @@ func main() {
 	for {
 		select {
 		case <-sending:
-			target := clients[rand.Int31n(int32(len(clients)))]
-			log.Println("Sending to ", target)
+			for _, target := range clients {
+				log.Println("Sending to ", target)
 
-			val, err := Data.ReadMeasurement(startTime, rec)
-			if err != nil {
-				log.Println(err)
-				continue
-			}
-			vectorTimestamp = vectorTimestamp.Now()
-			scalarTimestamp = scalarTimestamp.Now()
-			m := Message{
-				scalarTimestamp,
-				vectorTimestamp,
-				val,
-			}
-			messages = append(messages, &m)
-			if b, err := json.Marshal(m); err != nil {
-				log.Println(err)
-			} else {
-				log.Println("sending", string(b))
-				log.Println("sending", vectorTimestamp)
-				outward[fmt.Sprint(target)] <- b
+				val, err := Data.ReadMeasurement(startTime, rec)
+				if err != nil {
+					log.Println(err)
+					continue
+				}
+				vectorTimestamp = vectorTimestamp.Now()
+				scalarTimestamp = scalarTimestamp.Now()
+				m := Message{
+					scalarTimestamp,
+					vectorTimestamp,
+					val,
+				}
+				messages = append(messages, &m)
+				if b, err := json.Marshal(m); err != nil {
+					log.Println(err)
+				} else {
+					log.Println("sending", string(b), target)
+					select {
+					case outward[fmt.Sprint(target)] <- b:
+					default:
+						log.Println(target, "buffer full, not sending anymore")
+					}
+				}
 			}
 		case <-processBatchTime:
 			var sum float64
