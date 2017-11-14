@@ -56,11 +56,11 @@ type ShittyConn struct {
 
 func (conn *ShittyConn) WriteToUDP(b []byte, addr *net.UDPAddr) (int, error) {
 	if rand.Float64() < conn.lossRate {
-		log.Println("Fake dropping package", string(b), "to", addr)
+		log.Println("Fake dropping package", string(b[:20])+"...", "to", addr)
 		return len(b), nil
 	}
 	delay := time.Duration(rand.ExpFloat64()*1000*conn.avgDelay) * time.Millisecond
-	log.Println("Delay for package ", string(b), "is ", delay)
+	log.Println("Delay for package ", string(b[:20])+"...", "is ", delay)
 	time.Sleep(delay)
 	return conn.UDPConn.WriteToUDP(b, addr)
 }
@@ -76,12 +76,12 @@ func handleConn(in, out, inUDPPackages chan []byte, conn *ShittyConn, addr *net.
 			if err := json.Unmarshal(packet, &p); err != nil {
 				log.Println(string(packet), err)
 			} else {
-				log.Println("Recived ", p)
 				switch p.Type {
 				case ACK:
-					log.Println(addr, "reciever: Got ack for", p.Id)
+					log.Println(addr, "reciever: Got ACK for", p.Id)
 					delete(toAck, p.Id)
 				case REQ:
+					log.Println(addr, "reciever: Got REQ for", p.Id)
 					if out, err := json.Marshal(Packet{
 						Type: ACK,
 						Id:   p.Id,
@@ -122,10 +122,9 @@ func handleConn(in, out, inUDPPackages chan []byte, conn *ShittyConn, addr *net.
 			for k := range toAck {
 				keys = append(keys, k)
 			}
-			log.Println("Missing acks for packages", addr, keys, len(toAck))
+			log.Println("Missing", len(toAck), "acks for packages", keys, "for", addr)
 
 			for pid, out := range toAck {
-				log.Println("PID IS pid")
 				go func(pid int64, out []byte) {
 					if _, err := conn.WriteToUDP(out, addr); err != nil {
 						log.Println(err)
@@ -145,7 +144,7 @@ func UDProuter(conn *net.UDPConn, routes map[string]chan []byte) {
 		if err != nil {
 			log.Println(err)
 		} else {
-			log.Println("Router Received", string(buffer), "from", addr)
+			log.Println("Router Received packate from", addr)
 			hop, ok := routes[fmt.Sprint(addr)]
 			if !ok {
 				log.Println(addr, "missing from routes", routes)

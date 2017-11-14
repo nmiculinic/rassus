@@ -22,7 +22,7 @@ func ReadCSV(csvFile string) (records [][]string, err error) {
 }
 func ReadMeasurement(startTime time.Time, rec [][]string) (float64, error) {
 	elapsedSeconds := time.Now().Sub(startTime).Seconds()
-	no := (int(elapsedSeconds) % 100) + 2
+	no := (int(elapsedSeconds) % 100) + 1
 	log.Printf("Elapsed seconds %f, field %d, data %s\n", elapsedSeconds, no, rec[no])
 	if rec[no][3] != "" {
 		if val, err := strconv.ParseFloat(rec[no][3], 64); err != nil {
