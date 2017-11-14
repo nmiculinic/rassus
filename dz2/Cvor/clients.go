@@ -5,11 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math/rand"
 	"net"
 	"os"
 	"sync/atomic"
 	"time"
-	"math/rand"
 )
 
 func ReadClients(csvFile string) ([]*net.UDPAddr, error) {
@@ -59,7 +59,7 @@ func (conn *ShittyConn) WriteToUDP(b []byte, addr *net.UDPAddr) (int, error) {
 		log.Println("Fake dropping package", string(b), "to", addr)
 		return len(b), nil
 	}
-	delay := time.Duration(rand.ExpFloat64() * 1000 * conn.avgDelay) * time.Millisecond
+	delay := time.Duration(rand.ExpFloat64()*1000*conn.avgDelay) * time.Millisecond
 	log.Println("Delay for package ", string(b), "is ", delay)
 	time.Sleep(delay)
 	return conn.UDPConn.WriteToUDP(b, addr)
@@ -118,20 +118,21 @@ func handleConn(in, out, inUDPPackages chan []byte, conn *ShittyConn, addr *net.
 				}()
 			}
 		case <-ticker:
-			keys := make([]int64, len(toAck))
+			keys := make([]int64, 0, len(toAck))
 			for k := range toAck {
 				keys = append(keys, k)
 			}
 			log.Println("Missing acks for packages", addr, keys, len(toAck))
 
 			for pid, out := range toAck {
-				go func() {
+				log.Println("PID IS pid")
+				go func(pid int64, out []byte) {
 					if _, err := conn.WriteToUDP(out, addr); err != nil {
 						log.Println(err)
 					} else {
 						log.Println("Resent package with PID ", pid)
 					}
-				}()
+				}(pid, out)
 			}
 		}
 	}

@@ -1,36 +1,35 @@
 package main
 
 import (
-	"time"
-	"math/rand"
-	"math"
 	"log"
+	"math"
+	"math/rand"
 	"sync"
+	"time"
 )
 
 var (
-	StartTime time.Time
-	jitter = 0.2 * 2*(rand.Float64() - 0.5)
-	correction float64 = 0
-	scalarMutex = sync.Mutex{}
-	vectorMutex = sync.Mutex{}
-
+	StartTime   time.Time
+	jitter              = 0.2 * 2 * (rand.Float64() - 0.5)
+	correction  float64 = 0
+	scalarMutex         = sync.Mutex{}
+	vectorMutex         = sync.Mutex{}
 )
-func init()  {
+
+func init() {
 	StartTime = time.Now()
 	log.Print("Jitter is ", jitter)
 }
 
 func emulatedSystemClock() time.Time {
-	diff := time.Now().Sub(StartTime)
-	delta := correction + diff.Seconds() * math.Pow(1+jitter, diff.Seconds()/1000.0)
+	diff := time.Since(StartTime)
+	delta := correction + diff.Seconds()*math.Pow(1+jitter, diff.Seconds()/1000.0)
 	return StartTime.Add(time.Duration(delta * float64(time.Second)))
 }
 
-type ScalarTimestamp struct{
+type ScalarTimestamp struct {
 	Time time.Time `json:"time"`
 }
-
 
 func UpdateScalar(other *ScalarTimestamp) {
 	scalarMutex.Lock()
@@ -49,10 +48,10 @@ type VectorTimestamp struct {
 }
 
 func Max(x, y int64) int64 {
-    if x > y {
-        return x
-    }
-    return y
+	if x > y {
+		return x
+	}
+	return y
 }
 
 func (curr *VectorTimestamp) UpdateVector(other *VectorTimestamp, me string) VectorTimestamp {

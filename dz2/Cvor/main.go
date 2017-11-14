@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"github.com/nmiculinic/rassus/dz2/Cvor/Data"
@@ -8,13 +9,11 @@ import (
 	"math/rand"
 	"net"
 	"time"
-	"encoding/json"
 )
 
 type Message struct {
 	ScalarTimestamp ScalarTimestamp `json:"scalar_timestamp"`
 }
-
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
@@ -54,15 +53,15 @@ func main() {
 
 	inward := make(map[string]chan []byte)
 	outward := make(map[string]chan []byte)
-	router_inward := make(map[string]chan []byte)
+	routerInwards := make(map[string]chan []byte)
 
 	for _, client := range clients {
-		router_inward[fmt.Sprint(client)] = make(chan []byte)
+		routerInwards[fmt.Sprint(client)] = make(chan []byte)
 		inward[fmt.Sprint(client)] = make(chan []byte)
 		outward[fmt.Sprint(client)] = make(chan []byte)
 	}
 
-	go UDProuter(conn, router_inward)
+	go UDProuter(conn, routerInwards)
 	for k := range inward {
 		addr, err :=
 			net.ResolveUDPAddr("udp", k)
@@ -73,12 +72,12 @@ func main() {
 		go handleConn(
 			inward[k],
 			outward[k],
-			router_inward[k],
+			routerInwards[k],
 			&ShittyConn{
-				UDPConn: *conn,
+				UDPConn:  *conn,
 				avgDelay: *avgDelay,
 				lossRate: *lossRate,
-				},
+			},
 			addr,
 		)
 	}
@@ -88,7 +87,6 @@ func main() {
 	for {
 		select {
 		case <-sending:
-			log.Println("ovdje sam ")
 			target := clients[rand.Int31n(int32(len(clients)))]
 			log.Println("Sending to ", target, "at ", NowScalar())
 			if b, err := json.Marshal(Message{NowScalar()}); err != nil {
@@ -97,17 +95,18 @@ func main() {
 				outward[fmt.Sprint(target)] <- b
 			}
 		default:
-			target := clients[rand.Int31n(int32(len(clients)))]
-			select {
-			case recv := <-inward[fmt.Sprint(target)]:
-				log.Println("Got from inward", string(recv))
-				var m Message
-				if err := json.Unmarshal(recv, &m); err != nil {
-					log.Println(err)
-				} else {
-					UpdateScalar(&m.ScalarTimestamp)
+			for _, inChan := range inward {
+				select {
+					case recv := <-inChan:
+						log.Println("Got from inward", string(recv))
+						var m Message
+						if err := json.Unmarshal(recv, &m); err != nil {
+							log.Println(err)
+						} else {
+							UpdateScalar(&m.ScalarTimestamp)
+						}
+				default:
 				}
-			default:
 			}
 		}
 	}
